@@ -22,7 +22,7 @@ WORKDIR /app
 COPY . /app
 
 # สั่ง compile อัตโนมัติเมื่อสร้าง image
-# RUN make
+RUN make
 
 # สั่งให้ container ค้างไว้เพื่อให้เปิด terminal เข้ามาทดสอบได้
 CMD ["tail", "-f", "/dev/null"]

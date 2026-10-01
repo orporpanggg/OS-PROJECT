@@ -9,28 +9,21 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
-// ==========================================================
-//  CSS223 Cinema Reservation Project - Shared Header
-//  IPC Mechanism: POSIX Message Queue (mqueue.h)
-// ==========================================================
-
-// ชื่อ Queue ของ Server (คงที่ ทุกฝ่ายต้องใช้ชื่อนี้ตรงกัน)
+// ชื่อ Queue ของ Server
 #define SERVER_QUEUE_NAME "/css223_cinema_queue"
 
 // จำนวนที่นั่งทั้งหมดในระบบ
 #define MAX_RESOURCES 30
 
-// ขนาดของ Message ที่ใช้ตอน mq_open (mq_msgsize) และ mq_send/mq_receive
 #define MSG_SIZE sizeof(Message)
 
-// ความยาวบัฟเฟอร์สำหรับชื่อ client queue เช่น "/client_queue_12345"
 #define CLIENT_QUEUE_NAME_LEN 32
 
-// ค่ากำหนดสำหรับการเปิด Message Queue (client และ server ต้องใช้ค่าตรงกัน)
+// กำหนดสิทธิ์การเข้าถึง Message Queue เป็น 0660 (client และ server ต้องใช้ค่าตรงกัน)
 #define QUEUE_PERMISSIONS 0660
 #define MAX_MESSAGES 10
 
-// Enum กำหนดประเภทคำสั่งจาก Client
+// Enum กำหนดประเภทคำสั่งที่ Client ส่งหา Server ได้
 typedef enum {
     CMD_LIST = 1,
     CMD_STATUS,
@@ -39,23 +32,22 @@ typedef enum {
     CMD_QUIT
 } CommandType;
 
-// Enum สถานะตอบกลับจาก Server
+// Enum กำหนดสถานะผลลัพธ์ที่ Server ใช้ตอบกลับ
 typedef enum {
     RES_UNINITIALIZED = 0,
     RES_SUCCESS,
     RES_FAILED,
     RES_INVALID,
-    RES_ALREADY_RESERVED    // แยกเคสถูกแย่งจองใน Race Condition ให้ชัดเจน
+    RES_ALREADY_RESERVED
 } ResponseStatus;
 
 // Struct สำหรับส่ง-รับข้อความใน POSIX Queue
-// ใช้ struct เดียวกันทั้งขาไป (Client -> Server) และขากลับ (Server -> Client)
 typedef struct {
-    int client_id;          // หมายเลข Client (1, 2, 3, 4, 5)
+    int client_id;
     CommandType cmd;        // คำสั่งที่ส่งไป
     int resource_id;        // เลขที่นั่ง (1-30) ; ใช้ 0 ถ้าไม่เกี่ยวข้อง (เช่น LIST, QUIT)
-    ResponseStatus status;  // ผลลัพธ์ตอบกลับ (Server เป็นผู้กำหนดค่านี้)
-    char message[256];      // ข้อความแสดงผล (Server เป็นผู้กำหนดค่านี้)
+    ResponseStatus status;  // ผลลัพธ์ตอบกลับ (Server กำหนด)
+    char message[256];      // ข้อความแสดงผล (Server กำหนด)
 } Message;
 
 // ฟังก์ชัน helper สำหรับสร้างชื่อ Client Queue เฉพาะของแต่ละ client

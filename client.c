@@ -4,13 +4,6 @@
 #include <time.h>
 #include "common.h"
  
-// ==========================================================
-//  CSS223 Cinema Reservation Project - Client (เวอร์ชันปรับปรุง)
-//  วิธี Compile:   gcc client.c -o client -lrt -lpthread
-//  วิธี Run:       ./client <client_id>
-//  ตัวอย่าง:       ./client 1
-// ==========================================================
- 
 // รอคำตอบจาก server นานสุดกี่วินาที ก่อนถือว่า server ไม่ตอบ
 #define REPLY_TIMEOUT_SEC 5
  
@@ -21,17 +14,17 @@ static char  g_client_queue_name[CLIENT_QUEUE_NAME_LEN];
 // 1 = client ตัวนี้เป็นคน "สร้าง" queue สำเร็จ จึงมีสิทธิ์ unlink
 static int g_queue_created = 0;
  
-// signal handler แค่ตั้งธงนี้ ไม่ทำงานหนักใน handler
+// ตัวแปรแฟล็กสำหรับควบคุมการหยุดการทำงานของโปรแกรมเมื่อผู้ใช้กดปิด
 static volatile sig_atomic_t g_stop = 0;
  
-// ---------- signal handler: Ctrl+C (SIGINT) / kill (SIGTERM) ----------
+// เช่น การกด Ctrl+C ทำหน้าที่เปลี่ยนค่า g_stop เป็น 1 เพื่อให้ลูปหลักของโปรแกรมหยุดทำงาน
 static void on_signal(int sig) {
     (void)sig;
     g_stop = 1;
 }
  
-// ---------- ติดตั้ง handler ด้วย sigaction (ไม่ใส่ SA_RESTART) ----------
-// เพื่อให้ fgets / mq_timedreceive ที่กำลังบล็อกอยู่ "ถูกปลุก" ด้วย EINTR
+// ติดตั้ง handler ด้วย sigaction (ไม่ใส่ SA_RESTART)
+// เพื่อให้ระบบขัดจังหวะฟังก์ชันที่กำลังบล็อกรออินพุตหรือรอข้อความให้ตื่นขึ้นมาประมวลผลการปิดโปรแกรมได้ทันที
 static void setup_signals(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -41,7 +34,8 @@ static void setup_signals(void) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 }
- 
+
+// ฟังก์ชันสำหรับทำความสะอาดก่อนปิดโปรแกรม 
 // ปิด descriptor และลบ queue ของ client ตัวเองก่อนโปรแกรมจบ
 static void cleanup(void) {
     if (g_client_mq != (mqd_t)-1) {
@@ -59,8 +53,8 @@ static void cleanup(void) {
     }
 }
  
-// ---------- ล้างข้อความเก่าที่ค้างใน queue ของเราทิ้ง ----------
-// เผื่อกรณีก่อนหน้านี้ timeout แล้วคำตอบมาช้า จะได้ไม่สลับกับคำสั่งใหม่
+// ฟังก์ชันสำหรับล้างข้อความเก่าที่ค้างใน queue ของเราทิ้ง
+// เผื่อกรณีก่อนหน้านี้ Server timeout แล้วคำตอบมาช้า มาปะปนกับผลลัพธ์ของคำสั่งปัจจุบัน
 static void drain_client_queue(void) {
     struct mq_attr a;
     Message dummy;
@@ -73,30 +67,31 @@ static void drain_client_queue(void) {
  
 // พิมพ์เมนูคำสั่งให้ผู้ใช้ดู
 static void print_menu(void) {
-    printf("\n===== CSS223 Cinema Reservation =====\n");
+    printf("===========================================\n");
+    printf("\nCSS223 Cinema Reservation \n");
     printf("  LIST                 - แสดงรายการที่นั่งทั้งหมด\n");
     printf("  STATUS <seat_id>     - เช็คสถานะที่นั่ง\n");
     printf("  RESERVE <seat_id>    - จองที่นั่ง\n");
     printf("  CANCEL <seat_id>     - ยกเลิกการจอง\n");
     printf("  QUIT                 - ออกจากโปรแกรม\n");
-    printf("======================================\n");
+    printf("\n===========================================\n");
     printf("> ");
     fflush(stdout);
 }
  
-// แปลง input string ของผู้ใช้ ให้กลายเป็น Message struct
+// ฟังก์ชันรับข้อความจากผู้ใช้มาแปลงให้กลายเป็น Message struct
 // คืนค่า 1 = parse สำเร็จ, 0 = คำสั่งไม่ถูกต้อง (invalid)
 static int parse_input(const char *line, int client_id, Message *out_msg) {
     char cmd_word[32] = {0};
     int seat_id = 0;
-    int n = sscanf(line, "%31s %d", cmd_word, &seat_id);
+    int n = sscanf(line, "%31s %d", cmd_word, &seat_id); // ใช้ sscanf แยกคำสั่งตัวอักษรและหมายเลขที่นั่ง
  
     memset(out_msg, 0, sizeof(Message));
     out_msg->client_id = client_id;
     out_msg->resource_id = 0;
  
     if (n < 1) {
-        return 0; // บรรทัดว่าง
+        return 0;
     }
  
     for (char *p = cmd_word; *p; ++p) {
@@ -143,7 +138,7 @@ int main(int argc, char *argv[]) {
  
     get_client_queue_name(client_id, g_client_queue_name, sizeof(g_client_queue_name));
  
-    // ---------- สร้าง queue ของ client ตัวเองสำหรับ "รับ" คำตอบ ----------
+    // สร้าง queue ของ client ตัวเองสำหรับ "รับ" คำตอบ
     struct mq_attr attr;
     attr.mq_flags = 0;
     attr.mq_maxmsg = MAX_MESSAGES;
@@ -165,9 +160,9 @@ int main(int argc, char *argv[]) {
         }
         return EXIT_FAILURE;
     }
-    g_queue_created = 1;
+    g_queue_created = 1; //สร้างคิวสำเร็จ
  
-    // ---------- เปิด queue ของ server สำหรับ "ส่ง" คำสั่งไปหา ----------
+    // เปิด queue ของ server สำหรับ "ส่ง" คำสั่งไปหา 
     g_server_mq = mq_open(SERVER_QUEUE_NAME, O_WRONLY);
     if (g_server_mq == (mqd_t)-1) {
         perror("mq_open (server queue) ล้มเหลว - server เปิดอยู่หรือยัง?");
@@ -181,17 +176,18 @@ int main(int argc, char *argv[]) {
     Message request;
     Message response;
     int running = 1;
- 
+    
+    // การทำงานหลักของ client loop รับคำสั่งจากผู้ใช้ ส่งไปยัง server และรอรับคำตอบ
     while (running && !g_stop) {
         print_menu();
- 
+
         errno = 0;
         if (fgets(line, sizeof(line), stdin) == NULL) {
             if (errno == EINTR && !g_stop) {
-                clearerr(stdin);   // โดน signal อื่นขัด ไม่ใช่สัญญาณให้ปิด
+                clearerr(stdin);
                 continue;
             }
-            break; // EOF (Ctrl+D) หรือ g_stop (Ctrl+C)
+            break;
         }
  
         line[strcspn(line, "\n")] = '\0';
@@ -201,16 +197,14 @@ int main(int argc, char *argv[]) {
             continue;
         }
  
-        // เคลียร์คำตอบเก่าที่อาจค้างอยู่ก่อนส่งคำสั่งใหม่
         drain_client_queue();
  
         if (mq_send(g_server_mq, (const char *)&request, MSG_SIZE, 0) == -1) {
             perror("mq_send ล้มเหลว");
             continue;
         }
- 
-        // ---------- รอคำตอบแบบมี timeout ----------
-        // mq_timedreceive ใช้เวลาแบบ "สัมบูรณ์" (CLOCK_REALTIME) ไม่ใช่ "อีกกี่วินาที"
+        
+        // timeout สำหรับรอคำตอบจาก server
         struct timespec deadline;
         clock_gettime(CLOCK_REALTIME, &deadline);
         deadline.tv_sec += REPLY_TIMEOUT_SEC;
@@ -222,13 +216,13 @@ int main(int argc, char *argv[]) {
                 printf("\n[Client] server ไม่ตอบภายใน %d วินาที (server อาจปิดอยู่)\n",
                        REPLY_TIMEOUT_SEC);
             } else if (errno == EINTR) {
-                if (g_stop) break;      // ถูกสั่งปิดระหว่างรอ
+                if (g_stop) break;
                 continue;
             } else {
                 perror("mq_timedreceive ล้มเหลว");
             }
             if (request.cmd == CMD_QUIT) {
-                running = 0;            // ผู้ใช้อยากออก ก็ออกเลย ไม่ต้องรอ BYE
+                running = 0;
             }
             continue;
         }
@@ -242,15 +236,13 @@ int main(int argc, char *argv[]) {
             default:                   status_str = "UNKNOWN";          break;
         }
  
-        printf("\n[Server -> Client #%d] สถานะ: %s\n", client_id, status_str);
-        printf("ข้อความ: %s\n", response.message);
+        printf(">> [Client #%d] Status: %s | Message: %s\n", client_id, status_str, response.message);
  
         if (request.cmd == CMD_QUIT) {
             running = 0;
         }
     }
- 
-    printf("\nกำลังปิดการเชื่อมต่อ...\n");
+
     cleanup();
     printf("ปิดโปรแกรมเรียบร้อย\n");
  
