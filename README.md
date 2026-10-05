@@ -75,7 +75,15 @@ flowchart LR
     %% =========================
     %% REPLY
     %% =========================
-    RQ["Client-specific Reply Queue<br/>/client_queue_<client_id>"]
+    SR["send_response()<br/>mq_open(/client_queue_N) → mq_send → mq_close"]
+
+    subgraph RQS["Client-specific Reply Queues (1 queue ต่อ 1 Client)"]
+        RQ1["/client_queue_1"]
+        RQ2["/client_queue_2"]
+        RQ3["/client_queue_3"]
+        RQ4["/client_queue_4"]
+        RQ5["/client_queue_5"]
+    end
 
     %% Request path
     C1 --> MQ
@@ -100,17 +108,26 @@ flowchart LR
 
     MUTEX -. protects .-> T
 
-    %% Response path
-    W1 --> RQ
-    W2 --> RQ
-    W3 --> RQ
+    %% Response path (เส้นประ = ขากลับ)
+    W1 -.-> SR
+    W2 -.-> SR
+    W3 -.-> SR
 
-    RQ --> C1
-    RQ --> C2
-    RQ --> C3
-    RQ --> C4
-    RQ --> C5
+    SR -.-> RQ1
+    SR -.-> RQ2
+    SR -.-> RQ3
+    SR -.-> RQ4
+    SR -.-> RQ5
+
+    RQ1 -.-> C1
+    RQ2 -.-> C2
+    RQ3 -.-> C3
+    RQ4 -.-> C4
+    RQ5 -.-> C5
 ```
+
+> เส้นทึบ = **Request Path** (Client → Server) ส่วนเส้นประ = **Response Path** (Server → Client)
+> Worker ตอบกลับโดยเปิดคิวของ Client ที่ส่งคำขอมา (ชื่อคิวสร้างจาก `client_id` ด้วย `get_client_queue_name()`) จึงตอบกลับถึง Client ที่ถูกต้องเสมอ และ Client แต่ละตัวอ่านจากคิวของตัวเองเท่านั้น (ตามการออกแบบของโปรแกรม)
 
 ### 2.2 ลำดับการทำงาน
 
@@ -139,6 +156,29 @@ Client-specific Reply Queue
    ↓
 Client
 ```
+
+**ตัวอย่างลำดับเต็ม (Request → Response) ของคำสั่ง `RESERVE` จาก Client 3**
+
+```mermaid
+sequenceDiagram
+    participant C as Client 3
+    participant SQ as /css223_cinema_queue
+    participant D as Dispatcher
+    participant WQ as Worker Queue
+    participant W as Worker
+    participant T as Reservation Table (g_table)
+    participant RQ as /client_queue_3
+
+    C->>SQ: mq_send(RESERVE, seat)
+    SQ->>D: mq_receive()
+    D->>WQ: push (Round-Robin)
+    WQ->>W: pop
+    W->>T: lock → check → (random delay) → update → unlock
+    W->>RQ: mq_open + mq_send(status, message)
+    RQ->>C: mq_timedreceive() (timeout 5 วินาที)
+```
+
+Client สร้างคิวตอบกลับของตัวเอง (`/client_queue_<client_id>`) ก่อนส่งคำสั่งแรก และ `unlink` คิวนั้นเมื่อออกจากโปรแกรม ส่วน Server เป็นเพียงฝั่งที่ `mq_open` เพื่อเขียนผลลัพธ์ลงไป
 
 ### 2.3 หน้าที่ของแต่ละส่วน
 

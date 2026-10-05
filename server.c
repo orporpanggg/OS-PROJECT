@@ -49,6 +49,9 @@ static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
  
 static mqd_t g_server_mq = (mqd_t)-1;
 static int g_use_sync = 1;                 // เปิด/ปิด sync เพื่อป้องกัน Race Condition
+
+#define CS_NAME_UPDATE (g_use_sync ? "critical section" : "check-and-update region (NO LOCK)")
+#define CS_NAME_READ   (g_use_sync ? "critical section" : "read region (NO LOCK)")
 static volatile sig_atomic_t g_running = 1;
 static long g_seq = 0;
 
@@ -191,9 +194,9 @@ static void handle_list(int worker_id, int client_id) {
     char buf[256];
     int n = 0;
     if (g_use_sync) pthread_mutex_lock(&g_table_mutex);
-    char csbuf[64];
-    snprintf(csbuf, sizeof(csbuf), "\t%s[Worker-%d] entering critical section (LIST all)%s", 
-        worker_colors[cid], worker_id, COLOR_RESET);
+    char csbuf[128];
+    snprintf(csbuf, sizeof(csbuf), "\t%s[Worker-%d] entering %s (LIST all)%s", 
+        worker_colors[cid], worker_id, CS_NAME_READ, COLOR_RESET);
     log_line(csbuf);
     for (int i = 0; i < MAX_RESOURCES && n < (int)sizeof(buf) - 20; i++) {
         if (g_table[i].status == AVAILABLE) {
@@ -205,8 +208,8 @@ static void handle_list(int worker_id, int client_id) {
             n += snprintf(buf + n, sizeof(buf) - n, "\n");
         }
     }
-    snprintf(csbuf, sizeof(csbuf), "\t%s[Worker-%d] leaving critical section (LIST all)%s", 
-        worker_colors[cid], worker_id, COLOR_RESET);
+    snprintf(csbuf, sizeof(csbuf), "\t%s[Worker-%d] leaving %s (LIST all)%s", 
+        worker_colors[cid], worker_id, CS_NAME_READ, COLOR_RESET);
     log_line(csbuf);
     if (g_use_sync) pthread_mutex_unlock(&g_table_mutex);
  
@@ -228,15 +231,15 @@ static void handle_status(int worker_id, int client_id, int id) {
     log_line(logbuf);
  
     if (g_use_sync) pthread_mutex_lock(&g_table_mutex);
-    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] entering critical section (resource %d)%s",
-              worker_colors[cid], worker_id, id, COLOR_RESET);
+    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] entering %s (resource %d)%s",
+              worker_colors[cid], worker_id, CS_NAME_READ, id, COLOR_RESET);
     log_line(logbuf);
  
     int status = g_table[id - 1].status;
     int owner  = g_table[id - 1].owner;
  
-    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] leaving critical section (resource %d)%s",
-              worker_colors[cid], worker_id, id, COLOR_RESET);
+    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] leaving %s (resource %d)%s",
+              worker_colors[cid], worker_id, CS_NAME_READ, id, COLOR_RESET);
     log_line(logbuf);
     if (g_use_sync) pthread_mutex_unlock(&g_table_mutex);
  
@@ -244,8 +247,11 @@ static void handle_status(int worker_id, int client_id, int id) {
               worker_colors[cid], worker_id, id, client_id, status == AVAILABLE ? "AVAILABLE" : "RESERVED", COLOR_RESET);
  
     char msg[64];
-    snprintf(msg, sizeof(msg), "%s owner=%d",
-             status == AVAILABLE ? "AVAILABLE" : "RESERVED", owner);
+    if (status == AVAILABLE) {
+        snprintf(msg, sizeof(msg), "AVAILABLE"); 
+    } else {
+        snprintf(msg, sizeof(msg), "RESERVED (Owner: Client %d)", owner); 
+    }
     send_response(client_id, CMD_STATUS, id, RES_SUCCESS, msg);
 }
  
@@ -266,7 +272,7 @@ static void handle_reserve(int worker_id, int client_id, int id, unsigned int *s
     if (g_use_sync) pthread_mutex_lock(&g_table_mutex);
  
     int cid = worker_id % 7;
-    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] entering critical section (resource %d)%s", worker_colors[cid], worker_id, id, COLOR_RESET);
+    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] entering %s (resource %d)%s", worker_colors[cid], worker_id, CS_NAME_UPDATE, id, COLOR_RESET);
     log_line(logbuf);
  
     int current_status = g_table[idx].status;
@@ -283,7 +289,7 @@ static void handle_reserve(int worker_id, int client_id, int id, unsigned int *s
         success = 1;
     }
  
-    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] leaving critical section (resource %d)%s", worker_colors[cid], worker_id, id, COLOR_RESET);
+    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] leaving %s (resource %d)%s", worker_colors[cid], worker_id, CS_NAME_UPDATE, id, COLOR_RESET);
     log_line(logbuf);
  
     if (g_use_sync) pthread_mutex_unlock(&g_table_mutex);
@@ -317,8 +323,8 @@ static void handle_cancel(int worker_id, int client_id, int id) {
  
     if (g_use_sync) pthread_mutex_lock(&g_table_mutex);
     int cid = worker_id % 7;
-    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] entering critical section (resource %d)%s", 
-        worker_colors[cid], worker_id, id, COLOR_RESET);
+    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] entering %s (resource %d)%s", 
+        worker_colors[cid], worker_id, CS_NAME_UPDATE, id, COLOR_RESET);
     log_line(logbuf);
  
     int ok = 0;
@@ -328,8 +334,8 @@ static void handle_cancel(int worker_id, int client_id, int id) {
         ok = 1;
     }
  
-    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] leaving critical section (resource %d)%s", worker_colors[cid], 
-        worker_id, id, COLOR_RESET);
+    snprintf(logbuf, sizeof(logbuf), "\t%s[Worker-%d] leaving %s (resource %d)%s", worker_colors[cid], 
+        worker_id, CS_NAME_UPDATE, id, COLOR_RESET);
     log_line(logbuf);
     if (g_use_sync) pthread_mutex_unlock(&g_table_mutex);
  
